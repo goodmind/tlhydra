@@ -10,7 +10,7 @@ import Effect.Exception
 
 import TL.Store.Store
 import TL.Typechecker.TypeUnifier
-import TL.TypeChecker.TypeholeFiller
+import TL.Typechecker.TypeholeFiller
 import TL.Magic
 
 nameToVar : List TLSArg -> String -> Maybe TLSArg
