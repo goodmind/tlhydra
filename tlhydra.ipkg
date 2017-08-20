@@ -1,6 +1,6 @@
 package tlhydra
 
-opts = "-p contrib -p effects"
+opts = "-p contrib -p effects --partial-eval"
 modules = TLHydra,
           TLParserTypes,
           TL.Parser.Rules,
