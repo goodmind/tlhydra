@@ -10,6 +10,7 @@ modules = TLHydra,
           TL.Typechecker.Normalizer,
           TL.Typechecker.TypeholeFiller,
           TL.Typechecker.TypeUnifier,
+          TL.CodeGen.TypeScript,
           TL.Types
 
 main = TLHydra
