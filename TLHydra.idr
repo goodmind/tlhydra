@@ -1006,7 +1006,7 @@ phone.saveCallDebug#277add7e peer:InputPhoneCall debug:DataJSON = Bool;
 testIO : String -> String
 testIO str with (evaluateProgram str)
   testIO str | (Left l) = "Error: " ++ l
-  testIO str | (Right r) = toTypeDecl r
+  testIO str | (Right r) = toModuleDef @{ExportAll} r
 
 --lib : FFI_Export FFI_JS "" []
 --lib = Data TLStore "TLStore" $
