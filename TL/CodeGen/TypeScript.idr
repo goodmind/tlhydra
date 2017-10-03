@@ -1,86 +1,239 @@
 module TL.CodeGen.TypeScript
 
+import Prelude.List
 import List.Split
 import Text.Casing
 import TL.Types
 import TL.Store.Store
+import Effects
+import Effect.State
+import Effect.Exception
+import Effect.StdIO
 
 %access public export
 
+TSEff : Type -> Type
+TSEff ret = Effects.SimpleEff.Eff ret [
+  Store ::: STATE TLStore,
+  EXCEPTION String
+]
+
 interface TSNamed a where
-  toTypeName : a -> String
+  toTypeName : a -> TSEff String
 
 interface TSNamed a => TSInterface a where
-  toTypeDecl : a -> String
+  toTypeDecl : a -> TSEff String
+  toExportedTypeDecl : a -> TSEff String
+
+  toExportedTypeDecl t = do
+    name <- toTypeDecl t
+    pure $ "export" ++ name
+
+interface TSInterfaceProperty a where
+  toPropDecl : a -> TSEff String
+
+interface TSNamed a => TSFunction a where
+  toFunDecl : a -> TSEff String
+  toExportedFunDecl : a -> TSEff String
+
+  toExportedFunDecl t = do
+    fun <- toFunDecl t
+    pure $ "export " ++ fun
 
 interface TSNamed a => TSUnion a where
-  toUnionDecl : a -> String -> String
+  toUnionDecl : a -> String -> TSEff String
+  toExportedUnionDecl : a -> String -> TSEff String
 
-TSNamed (List a) where
-  toTypeName _ = "List"
+  toExportedUnionDecl xs name = do
+    union <- toUnionDecl xs name
+    pure $ "export " ++ union
 
-TSNamed a => TSUnion (List a) where
-  toUnionDecl xs name = "type " ++ name ++ " = " ++ (union' "" xs) ++ ";\n" where
-    union' acc []        = acc
-    union' acc [x]       = acc ++ (toTypeName x)
-    union' acc (x :: xs) = union' (acc ++ (toTypeName x) ++ "\n | ") xs
+interface TSModule a where
+  toModuleDef : a -> Either String String
 
 toIdent : String -> String -> String
 toIdent name prefix = prefix ++ (pascal . replace' "." "_") name
+  
+wrapInModule : String -> String
+wrapInModule x = """declare module 'tl' {
+""" ++ x ++ """
+}"""
+
+TSNamed (List a) where
+  toTypeName _ = pure "List"
+
+TSNamed a => TSUnion (List a) where
+  toUnionDecl xs name = do
+      types <- union' "" xs
+      pure $ "type " ++ name ++ " = " ++ types ++ ";\n" 
+    where
+      union' : String -> (List a) -> TSEff String
+      union' acc []        = pure acc
+      union' acc [x]       = do
+        v <- toTypeName x
+        pure $ acc ++ v
+      union' acc (x :: xs) = do
+        name <- toTypeName x
+        union' (acc ++ name ++ "\n | ") xs
+
+
+
+TSNamed TLBuiltIn where
+  toTypeName TLInt = pure "number"
+  toTypeName TLNat = pure "number"
+  toTypeName TLLong = pure "string"
+  toTypeName TLString = pure "string"
+  toTypeName TLDouble = pure "number"
+  toTypeName TLTType = pure "any"
+  toTypeName TLInt128 = pure "number"
+  toTypeName TLInt256 = pure "number"
+
+TSNamed TypeRef where
+  toTypeName (Left a) = toTypeName a
+  toTypeName (Right (a, b)) = pure $ show a ++ ", " ++ show b 
+
+TSNamed TLSTypeExpr where
+  toTypeName (MkTLSTypeExpr type children) = do 
+    name <- toTypeName type
+    pure $ name ++ "/*" ++ (show children) ++ "*/ "
+  toTypeName (MkTLSTypeArray mult args) = pure $ (show mult) ++ "*" ++ (show args)
+  toTypeName (MkTLSTypeVar ref) = pure $ "/*generic*/ #" ++ (show ref)
+  toTypeName (MkTLSTypeBare expr) = do 
+    name <- toTypeName expr
+    pure $ "/*bare*/" ++ name
+  toTypeName (MkTLSTypeBang expr) = do
+    name <- toTypeName expr
+    pure $ "/*bang*/" ++ name
+  toTypeName (MkTLSTypeHole name exprs) = pure $ "?hole " ++ (show name) ++ " " ++ (show exprs)
+
+TSInterfaceProperty TLSArg where
+  toPropDecl (MkTLSArg id var_num type) = do
+    name <- toTypeName type
+    pure $ id ++ ": " ++ name
+  toPropDecl (MkTLSArgOpt id var_num type) = do
+    name <- toTypeName type
+    pure $ "{" ++ id ++ ": " ++ name ++ "}"
+  toPropDecl (MkTLSArgCond id var_num cond type) = do
+    name <- toTypeName type
+    pure $ id ++ ": " ++ name ++ " " ++ (show cond)
 
 TSNamed TLType where
-  toTypeName (MkTLType name _) = toIdent name "T"
-  toTypeName (MkTLTypeBuiltin x) = show x
+  toTypeName (MkTLType name _) = pure $ toIdent name "T"
+  toTypeName (MkTLTypeBuiltin x) = pure $ show x
 
 TSInterface TLType where
-  toTypeDecl t = case t of
-    MkTLType name _ => """
-interface """ ++ toTypeName t ++ """ {
+  toTypeDecl t = do
+    interfaceName <- toTypeName t
+    pure $ case t of
+      MkTLType name _ => """
+interface """ ++ interfaceName ++ """ {
   _: '""" ++ name ++ """';
   // """ ++ show t ++ """
 }
 """
-    MkTLTypeBuiltin => """
-interface """ ++ toTypeName t ++ """ {}
+      MkTLTypeBuiltin => """
+interface """ ++ interfaceName ++ """ {}
 """
 
 TSNamed TLSConstructor where
-  toTypeName (MkTLSConstructor identifier _ _ _ _) = toIdent identifier "C"
+  toTypeName (MkTLSConstructor identifier _ _ _ _) = pure $ toIdent identifier "C"
 
 TSInterface TLSConstructor where
-  toTypeDecl t = let (MkTLSConstructor identifier _ _ _ _) = t in """
-interface """ ++ toTypeName t ++ """ {
-  _: '""" ++ identifier ++ """';
+  toTypeDecl t@(MkTLSConstructor identifier _ args _ _) = do
+    typeName <- toTypeName t
+    props <- mapE (\x => toPropDecl x) args
+    pure $ """
+interface """ ++ typeName ++ """ {
   // """ ++ show t ++ """
+  _: '""" ++ identifier ++ """';
+  """ ++ concat (intersperse ";\n  " props) ++ """
 }
 """
 
 TSNamed TLSFunction where
-  toTypeName (MkTLSFunction identifier _ _ _) = toIdent identifier "F"
+  toTypeName (MkTLSFunction identifier _ _ _) = pure $ toIdent identifier "F"
 
 TSInterface TLSFunction where
-  toTypeDecl t = let (MkTLSFunction identifier _ _ _) = t in """
-interface """ ++ toTypeName t ++ """ {
-  _: '""" ++ identifier ++ """';
+  toTypeDecl t@(MkTLSFunction identifier _ args resultType) = do 
+    typeName <- toTypeName t
+    props <- mapE (\x => toPropDecl x) args
+    pure $ """
+interface """ ++ typeName ++ """ {
   // """ ++ show t ++ """
+  // """ ++ show args ++ """
+  // """ ++ show resultType ++ """
+  _: '""" ++ identifier ++ """';
+  """ ++ concat (intersperse ";\n  " props) ++ """
 }
-""" 
+"""
+
+TSFunction TLSFunction where
+  toFunDecl t@(MkTLSFunction identifier _ _ _) = do
+    typeName <- toTypeName t
+    pure $ "function invoke(method: '" ++ identifier ++ "', input: " ++ typeName ++ "): void\n"
 
 TSNamed TLStore where
-  toTypeName _ = "TLStore"
+  toTypeName _ = pure $ "TLStore"
 
 TSInterface TLStore where
-  toTypeDecl (MkTLStore types functions constructors) = ""
-    ++ (concat $ map toTypeDecl types) 
-    ++ (toUnionDecl types "TLType")
-    ++ (concat $ map toTypeDecl functions)
-    ++ (toUnionDecl functions "TLSFunction")
-    ++ (concat $ map toTypeDecl constructors)
-    ++ (toUnionDecl constructors "TLSConstructor") 
-    ++ """
+  toTypeDecl _ = pure $ """
 interface TLStore {
   types: TLType[];
   functions: TLSFunction[];
   constructors: TLSConstructor[];
 }
 """
+
+mkString' : (TSInterface a => a -> TSEff String)
+  -> (TSFunction b => b -> TSEff String)
+  -> (TSUnion c => c -> String -> TSEff String)
+  -> TSEff String
+mkString' toTypeDecl toFunDecl toUnionDecl = do
+  store <- Store :- get
+  let (MkTLStore types functions constructors) = store
+  newTypes <- mapE (\x => toTypeDecl x) types
+  newFuns <- mapE (\x => toTypeDecl x) functions
+  newFunsDecl <- mapE (\x => toFunDecl x) functions
+  newCons <- mapE (\x => toTypeDecl x) constructors
+  typesUnion <- toUnionDecl types "TLType"
+  funUnion <- toUnionDecl functions "TLSFunction"
+  conUnion <- toUnionDecl constructors "TLSConstructor"
+  newStore <- toTypeDecl store
+  pure $ ""
+    ++ (concat $ newTypes)
+    ++ typesUnion
+    ++ (concat $ newFuns)
+    ++ (concat $ newFunsDecl)
+    ++ funUnion
+    ++ (concat $ newCons)
+    ++ conUnion
+    ++ newStore
+
+
+{-
+mkExportedString' : TSEff String
+mkExportedString' = do
+  store <- Store :- get
+  let (MkTLStore types functions constructors) = store
+  pure $ ""
+    ++ (concat $ map toExportedTypeDecl types)
+    ++ toExportedUnionDecl types "TLType"
+    ++ (concat $ map toExportedTypeDecl functions)
+    ++ (concat $ map toExportedFunDecl functions)
+    ++ toExportedUnionDecl functions "TLSFunction"
+    ++ (concat $ map toExportedTypeDecl constructors)
+    ++ toExportedUnionDecl constructors "TLSConstructor"
+    ++ (toExportedTypeDecl store)
+-}
+
+TSModule TLStore where
+  toModuleDef store = runInit [ 
+    Store := store,
+    default
+  ] (mkString' toTypeDecl toFunDecl toUnionDecl)
+
+[ExportAll] TSModule TLStore where
+  toModuleDef store = runInit [ 
+    Store := store,
+    default
+  ] (mkString' toExportedTypeDecl toExportedFunDecl toExportedUnionDecl)
