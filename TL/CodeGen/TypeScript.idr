@@ -76,7 +76,15 @@ TSNamed a => TSUnion (List a) where
         name <- toTypeName x
         union' (acc ++ name ++ "\n | ") xs
 
+TSNamed TLType where
+  toTypeName (MkTLType name _) = pure $ toIdent name "T"
+  toTypeName (MkTLTypeBuiltin x) = pure $ show x
 
+TSNamed TLSConstructor where
+  toTypeName (MkTLSConstructor identifier _ _ _ _) = pure $ toIdent identifier "C"
+
+TSNamed TLSFunction where
+  toTypeName (MkTLSFunction identifier _ _ _) = pure $ toIdent identifier "F"
 
 TSNamed TLBuiltIn where
   toTypeName TLInt = pure "number"
@@ -90,7 +98,10 @@ TSNamed TLBuiltIn where
 
 TSNamed TypeRef where
   toTypeName (Left a) = toTypeName a
-  toTypeName (Right (a, b)) = pure $ show a ++ ", " ++ show b 
+  toTypeName (Right (a, b)) = do
+    store <- Store :- get
+    let c = storeGetType (Right (a, b)) store
+    pure $ show a ++ ", " ++ show b ++ ", " ++ toTypeName c
 
 TSNamed TLSTypeExpr where
   toTypeName (MkTLSTypeExpr type children) = do 
@@ -115,11 +126,7 @@ TSInterfaceProperty TLSArg where
     pure $ "{" ++ id ++ ": " ++ name ++ "}"
   toPropDecl (MkTLSArgCond id var_num cond type) = do
     name <- toTypeName type
-    pure $ id ++ ": " ++ name ++ " " ++ (show cond)
-
-TSNamed TLType where
-  toTypeName (MkTLType name _) = pure $ toIdent name "T"
-  toTypeName (MkTLTypeBuiltin x) = pure $ show x
+    pure $ id ++ "?: " ++ name ++ " /*cond*/" ++ (show cond)
 
 TSInterface TLType where
   toTypeDecl t = do
@@ -135,9 +142,6 @@ interface """ ++ interfaceName ++ """ {
 interface """ ++ interfaceName ++ """ {}
 """
 
-TSNamed TLSConstructor where
-  toTypeName (MkTLSConstructor identifier _ _ _ _) = pure $ toIdent identifier "C"
-
 TSInterface TLSConstructor where
   toTypeDecl t@(MkTLSConstructor identifier _ args _ _) = do
     typeName <- toTypeName t
@@ -149,9 +153,6 @@ interface """ ++ typeName ++ """ {
   """ ++ concat (intersperse ";\n  " props) ++ """
 }
 """
-
-TSNamed TLSFunction where
-  toTypeName (MkTLSFunction identifier _ _ _) = pure $ toIdent identifier "F"
 
 TSInterface TLSFunction where
   toTypeDecl t@(MkTLSFunction identifier _ args resultType) = do 
@@ -184,21 +185,40 @@ interface TLStore {
 }
 """
 
-mkString' : (TSInterface a => a -> TSEff String)
-  -> (TSFunction b => b -> TSEff String)
-  -> (TSUnion c => c -> String -> TSEff String)
-  -> TSEff String
-mkString' toTypeDecl toFunDecl toUnionDecl = do
+mkString' : TSEff String
+mkString' = do
   store <- Store :- get
-  let (MkTLStore types functions constructors) = store
-  newTypes <- mapE (\x => toTypeDecl x) types
-  newFuns <- mapE (\x => toTypeDecl x) functions
-  newFunsDecl <- mapE (\x => toFunDecl x) functions
-  newCons <- mapE (\x => toTypeDecl x) constructors
-  typesUnion <- toUnionDecl types "TLType"
-  funUnion <- toUnionDecl functions "TLSFunction"
-  conUnion <- toUnionDecl constructors "TLSConstructor"
+  -- let (MkTLStore types functions constructors) = store
+  newTypes <- mapE (\x => toTypeDecl x) (types store)
+  newFuns <- mapE (\x => toTypeDecl x) (functions store)
+  newFunsDecl <- mapE (\x => toFunDecl x) (functions store)
+  newCons <- mapE (\x => toTypeDecl x) (constructors store)
+  typesUnion <- toUnionDecl (types store) "TLType"
+  funUnion <- toUnionDecl (functions store) "TLSFunction"
+  conUnion <- toUnionDecl (constructors store) "TLSConstructor"
   newStore <- toTypeDecl store
+  pure $ ""
+    ++ (concat $ newTypes)
+    ++ typesUnion
+    ++ (concat $ newFuns)
+    ++ (concat $ newFunsDecl)
+    ++ funUnion
+    ++ (concat $ newCons)
+    ++ conUnion
+    ++ newStore
+
+mkExportedString' : TSEff String
+mkExportedString' = do
+  store <- Store :- get
+  -- let (MkTLStore types functions constructors) = store
+  newTypes <- mapE (\x => toExportedTypeDecl x) (types store)
+  newFuns <- mapE (\x => toExportedTypeDecl x) (functions store)
+  newFunsDecl <- mapE (\x => toExportedFunDecl x) (functions store)
+  newCons <- mapE (\x => toExportedTypeDecl x) (constructors store)
+  typesUnion <- toExportedUnionDecl (types store) "TLType"
+  funUnion <- toExportedUnionDecl (functions store) "TLSFunction"
+  conUnion <- toExportedUnionDecl (constructors store) "TLSConstructor"
+  newStore <- toExportedTypeDecl store
   pure $ ""
     ++ (concat $ newTypes)
     ++ typesUnion
@@ -230,10 +250,10 @@ TSModule TLStore where
   toModuleDef store = runInit [ 
     Store := store,
     default
-  ] (mkString' toTypeDecl toFunDecl toUnionDecl)
+  ] mkString'
 
 [ExportAll] TSModule TLStore where
   toModuleDef store = runInit [ 
     Store := store,
     default
-  ] (mkString' toExportedTypeDecl toExportedFunDecl toExportedUnionDecl)
+  ] mkExportedString'
