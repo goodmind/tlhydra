@@ -5,6 +5,7 @@ import List.Split
 import Text.Casing
 import TL.Types
 import TL.Store.Store
+
 import Effects
 import Effect.State
 import Effect.Exception
@@ -94,8 +95,7 @@ mutual
   TSNamed TypeRef where
     toTypeName (Left a) = toTypeName a
     toTypeName type@(Right (a, b)) = do
-      store <- Store :- get
-      pure $ show a ++ ", " ++ show b ++ ", " ++ toTypeName (storeGetType type store)
+      pure $ show a ++ ", " ++ show b ++ ", " ++ !(toTypeName (storeGetType type !(Store :- get)))
 
 TSNamed TLSConstructor where
   toTypeName (MkTLSConstructor identifier _ _ _ _) = pure $ toIdent identifier "C"
