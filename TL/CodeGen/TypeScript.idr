@@ -76,32 +76,32 @@ TSNamed a => TSUnion (List a) where
         name <- toTypeName x
         union' (acc ++ name ++ "\n | ") xs
 
-TSNamed TLType where
-  toTypeName (MkTLType name _) = pure $ toIdent name "T"
-  toTypeName (MkTLTypeBuiltin x) = pure $ show x
+mutual
+  TSNamed TLType where
+    toTypeName (MkTLType name _) = pure $ toIdent name "T"
+    toTypeName (MkTLTypeBuiltin x) = pure $ show x
+
+  TSNamed TLBuiltIn where
+    toTypeName TLInt = pure "number"
+    toTypeName TLNat = pure "number"
+    toTypeName TLLong = pure "string"
+    toTypeName TLString = pure "string"
+    toTypeName TLDouble = pure "number"
+    toTypeName TLTType = pure "any"
+    toTypeName TLInt128 = pure "number"
+    toTypeName TLInt256 = pure "number"
+
+  TSNamed TypeRef where
+    toTypeName (Left a) = toTypeName a
+    toTypeName type@(Right (a, b)) = do
+      store <- Store :- get
+      pure $ show a ++ ", " ++ show b ++ ", " ++ toTypeName (storeGetType type store)
 
 TSNamed TLSConstructor where
   toTypeName (MkTLSConstructor identifier _ _ _ _) = pure $ toIdent identifier "C"
 
 TSNamed TLSFunction where
   toTypeName (MkTLSFunction identifier _ _ _) = pure $ toIdent identifier "F"
-
-TSNamed TLBuiltIn where
-  toTypeName TLInt = pure "number"
-  toTypeName TLNat = pure "number"
-  toTypeName TLLong = pure "string"
-  toTypeName TLString = pure "string"
-  toTypeName TLDouble = pure "number"
-  toTypeName TLTType = pure "any"
-  toTypeName TLInt128 = pure "number"
-  toTypeName TLInt256 = pure "number"
-
-TSNamed TypeRef where
-  toTypeName (Left a) = toTypeName a
-  toTypeName (Right (a, b)) = do
-    store <- Store :- get
-    let c = storeGetType (Right (a, b)) store
-    pure $ show a ++ ", " ++ show b ++ ", " ++ toTypeName c
 
 TSNamed TLSTypeExpr where
   toTypeName (MkTLSTypeExpr type children) = do 
